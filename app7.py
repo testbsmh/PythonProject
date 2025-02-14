@@ -7,6 +7,7 @@ import json
 import datetime
 
 from sqlalchemy import create_engine
+
 def get_sqlalchemy_engine(conn_config):
     # URL encode the username and password to ensure special characters are handled
     user = urllib.parse.quote_plus(conn_config['user'])
