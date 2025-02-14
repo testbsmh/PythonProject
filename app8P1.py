@@ -30,48 +30,7 @@ def fetch_data(sql_query, conn_config, sample_size=None):
             sql_query = f"{sql_query} LIMIT {sample_size}"
         df = pd.read_sql(sql_query, connection)
     return df
-
-def run_query(query_config, connections, full_fetch=False, count_only=False):
-    if 'connection_id' not in query_config:
-        st.error("Connection not specified for query.")
-        return None
-
-    conn_config = next((conn for conn in connections if conn['id'] == query_config['connection_id']), None)
-    if not conn_config:
-        st.error("Selected connection configuration not found.")
-        return None
-
-    # Build SQL statement
-    if count_only:
-        sql = f"SELECT COUNT(*) FROM ({query_config['base_sql']}) AS subquery"
-        if query_config.get('filter'):
-            sql = f"SELECT COUNT(*) FROM ({query_config['base_sql']} WHERE {query_config['filter']}) AS subquery"
-         #Set full_fetch to true since we're counting the rows, not fetching data
-        full_fetch = True
-    else:
-        sql = query_config['base_sql']
-        if query_config.get('filter'):
-            sql += f" WHERE {query_config['filter']}"
-
-    try:
-        # Use sample_size to control data fetching based on full_fetch flag
-        sample_size = None if full_fetch else 5  # Change 5 to your desired sample size for display
-
-        df = fetch_data(sql, conn_config, sample_size)
-
-        if df is not None and not df.empty:
-            if count_only:
-                return df.iloc[0, 0]  # Return the count value from the result
-            return df
-
-        st.warning("Query did not return any rows.")
-        return None
-    except Exception as e:
-        st.error(f"Test failed: {e}")
-        return None
-
-
-def run_query2(query_config, connections, full_fetch=False):
+def run_query(query_config, connections, full_fetch=False):
     if 'connection_id' not in query_config:
         st.error("Connection not specified for query.")
         return None
@@ -96,16 +55,6 @@ def run_query2(query_config, connections, full_fetch=False):
     except Exception as e:
         st.error(f"Test failed: {e}")
         return None
-
-def fetch_count_data(sql_query, conn_config, full_fetch=False):
-    engine = get_sqlalchemy_engine(conn_config)
-    with engine.connect() as connection:
-        query = f"SELECT COUNT(*) AS row_count FROM ({sql_query}) AS subquery"
-        result = connection.execute(text(query))
-        count = result.scalar()
-    return count
-
-
 def get_row_count(sql_query, conn_config):
     engine = get_sqlalchemy_engine(conn_config)
     count_query = f"SELECT COUNT(*) FROM ({sql_query}) AS total"
@@ -146,12 +95,11 @@ def main():
                 st.markdown(f"**{query['name']}** - Tag: {query.get('tag', 'None')}")
 
                 # Get and display total row count
-                row_count = run_query(query, st.session_state['connections'],count_only=True)
+                row_count = get_row_count(query['base_sql'], st.session_state['connections'][0])
                 st.write(f"Available Rows: {row_count}")
 
                 # Checkbox to show sample data
-                show_table_checkbox = st.checkbox(f"Show Sample for {query['name']}",
-                                                  key=f"show_sample_{i}_{query['name']}")
+                show_table_checkbox = st.checkbox(f"Show Sample for {query['name']}", key=f"show_sample_{i}")
 
                 if show_table_checkbox:
                     # Load sample data on checkbox activation
@@ -160,7 +108,7 @@ def main():
                         st.dataframe(sample_df)
 
                     # Button to export full data to Excel
-                    if st.button(f"Export Full Data for {query['name']}", key=f"export_{i}_{query['name']}"):
+                    if st.button(f"Export Full Data for {query['name']}", key=f"export_{i}"):
                         full_df = run_query(query, st.session_state['connections'], full_fetch=True)
                         if full_df is not None:
                             towrite = io.BytesIO()
@@ -223,7 +171,7 @@ def main():
 
                 if st.button(f"Test Query {i + 1}", key=f"test_{i}"):
                     try:
-                        test_result = run_query(query, st.session_state['connections'],count_only=True)
+                        test_result = run_query(query, st.session_state['connections'])
                         if test_result is not None:
                             st.write(f"Test succeeded: {test_result} rows returned.")
 
