@@ -29,6 +29,7 @@ def fetch_data(sql_query, conn_config, sample_size=None):
             sql_query = f"{sql_query} LIMIT {sample_size}"
         df = pd.read_sql(sql_query, connection)
     return df
+
 def run_query(query_config, connections, full_fetch=False):
     if 'connection_id' not in query_config:
         st.error("Connection not specified for query.")
@@ -44,8 +45,7 @@ def run_query(query_config, connections, full_fetch=False):
         sql += f" WHERE {query_config['filter']}"
 
     try:
-        # Use sample_size to control data fetching based on full_fetch flag
-        sample_size = None if full_fetch else 5  # Change 5 to your desired sample size for display
+        sample_size = 5 if not full_fetch else None  # Change this number to display more or fewer rows
         df = fetch_data(sql, conn_config, sample_size)
         if df is not None and not df.empty:
             return df
@@ -85,32 +85,28 @@ def main():
 
             for i, query in enumerate(group_queries):
                 st.markdown(f"**{query['name']}** - Tag: {query.get('tag', 'None')}")
+                result = query.get('result')
+                if result is not None:
+                    st.write(f"Number of Rows: {len(result)}")
+                    print(f"Query '{query['name']}' returned {len(result)} rows.")
 
-                # Checkbox to show sample data
-                show_table_checkbox = st.checkbox(f"Show Sample for {query['name']}", key=f"show_sample_{i}")
+                    show_table = st.checkbox(f"Show Full Table for {query['name']}", key=f"show_{i}")
+                    if show_table:
+                        # Show sample data
+                        sample_df = run_query(query, st.session_state['connections'], full_fetch=False)
+                        if sample_df is not None:
+                            st.dataframe(sample_df)
 
-                if show_table_checkbox:
-                    # Load sample data on checkbox activation
-                    sample_df = run_query(query, st.session_state['connections'], full_fetch=False)
-                    if sample_df is not None:
-                        st.dataframe(sample_df)
-
-                    # Button to export full data to Excel
-                    if st.button(f"Export Full Data for {query['name']}", key=f"export_{i}"):
+                        # Provide export option for full data
                         full_df = run_query(query, st.session_state['connections'], full_fetch=True)
                         if full_df is not None:
                             towrite = io.BytesIO()
                             with pd.ExcelWriter(towrite, engine='xlsxwriter') as writer:
                                 full_df.to_excel(writer, index=False, sheet_name='Sheet1')
                             towrite.seek(0)
-                            st.download_button(
-                                label="Download Excel",
-                                data=towrite,
-                                file_name=f"{query['name']}_full.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            )
-                        else:
-                            st.warning("No data available to export.")
+                            st.download_button(label="Export to Excel", data=towrite, file_name=f"{query['name']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                else:
+                    st.warning("No data to display. You may need to run the query first.")
 
     with tab2:
         st.header("Configuration")

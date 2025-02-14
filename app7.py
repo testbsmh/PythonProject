@@ -1,19 +1,19 @@
+import datetime
+import json
 import urllib
 
-import streamlit as st
-import snowflake.connector
 import pandas as pd
-import json
-import datetime
-
+import streamlit as st
 from sqlalchemy import create_engine
+import io
+import xlsxwriter
+
+#pip freeze > requirements.txt
+#streamlit run app7.py
 
 def get_sqlalchemy_engine(conn_config):
-    # URL encode the username and password to ensure special characters are handled
     user = urllib.parse.quote_plus(conn_config['user'])
     password = urllib.parse.quote_plus(conn_config['password'])
-
-    # Create an SQLAlchemy engine
     connection_string = (
         f"snowflake://{user}:{password}@{conn_config['account']}/"
         f"{conn_config['database']}/{conn_config['schema']}?"
@@ -21,14 +21,16 @@ def get_sqlalchemy_engine(conn_config):
     )
     return create_engine(connection_string)
 
-def fetch_data(sql_query, conn_config):
+def fetch_data(sql_query, conn_config, full_fetch=False):
     engine = get_sqlalchemy_engine(conn_config)
     with engine.connect() as connection:
-        df = pd.read_sql(sql_query, connection)
+        if full_fetch:
+            df = pd.read_sql(sql_query, connection)
+        else:
+            df = pd.read_sql(f"SELECT COUNT(*) AS row_count FROM ({sql_query}) AS subquery", connection)
     return df
 
-
-def run_query(query_config, connections):
+def run_query(query_config, connections, full_fetch=False):
     if 'connection_id' not in query_config:
         st.error("Connection not specified for query.")
         return None
@@ -38,27 +40,25 @@ def run_query(query_config, connections):
         st.error("Selected connection configuration not found.")
         return None
 
-    # Ensure the fully qualified table name is correct
-    sql = f"SELECT COUNT(*) AS row_count FROM {conn_config['database']}.{conn_config['schema']}.CUSTOMER"
-    if query_config['filter'].strip():
+    sql = query_config['base_sql']
+    if query_config.get('filter'):
         sql += f" WHERE {query_config['filter']}"
 
     try:
-        df = fetch_data(sql, conn_config)
+        df = fetch_data(sql, conn_config, full_fetch)
         if df is not None and not df.empty:
-            count = df.iloc[0]['row_count']
-            #st.write(f"Number of rows: {count}")
-            print(f"Query Execution Successful: {count} rows found.")
-            query_config['result'] = count  # Store result count for display
-            return count
+            if full_fetch:
+                return df
+            else:
+                count = df.iloc[0]['row_count']
+                st.write(f"Number of rows: {count}")
+                query_config['result'] = count
+                return count
         st.warning("Query did not return any rows.")
-        print("Query did not return any rows.")
         return None
     except Exception as e:
         st.error(f"Test failed: {e}")
-        print(f"Test failed: {e}")
         return None
-
 
 
 def main():
@@ -89,13 +89,25 @@ def main():
                 for query in group_queries:
                     query['result'] = run_query(query, st.session_state['connections'])
 
-            # Loop to display query results alongside the query tag/name
             for i, query in enumerate(group_queries):
                 st.markdown(f"**{query['name']}** - Tag: {query.get('tag', 'None')}")
                 result = query.get('result')
                 if result is not None:
                     st.write(f"Number of Rows: {result}")
                     print(f"Query '{query['name']}' returned {result} rows.")
+
+                    show_table = st.checkbox(f"Show Full Table for {query['name']}", key=f"show_{i}")
+                    if show_table:
+                        full_df = run_query(query, st.session_state['connections'], full_fetch=True)
+                        if full_df is not None:
+                            st.dataframe(full_df)
+
+                            # Provide export option as Excel
+                            towrite = io.BytesIO()
+                            with pd.ExcelWriter(towrite, engine='xlsxwriter') as writer:
+                                full_df.to_excel(writer, index=False, sheet_name='Sheet1')
+                            towrite.seek(0)
+                            st.download_button(label="Export to Excel", data=towrite, file_name=f"{query['name']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 else:
                     st.warning("No data to display. You may need to run the query first.")
 
@@ -257,7 +269,7 @@ def test_snowflake_connection(conn_config):
         engine = get_sqlalchemy_engine(conn_config)
         with engine.connect() as connection:
             # Simple query to test the connection
-            result = connection.execute("SELECT CURRENT_VERSION()").fetchone()
+            result = connection.execute("SELECT CURRENT_SESSION()").fetchone()
             print(f"Connected successfully to Snowflake version: {result[0]}")
         return True, "Connection successful!"
     except Exception as e:
