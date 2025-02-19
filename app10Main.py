@@ -114,52 +114,6 @@ def get_row_count(sql_query, conn_config):
         row_count = result.scalar()
     return row_count
 
-    # Function to compare two DataFrames based on selected columns
-
-
-def compare_dataframes2(df1, df2, column_1, column_2, use_primary=True):
-    if use_primary:
-        # Align using primary keys
-        common_index = df1.index.intersection(df2.index)
-        df1_common = df1.loc[common_index, column_1]
-        df2_common = df2.loc[common_index, column_2]
-        differences = df1_common != df2_common
-    else:
-        # Compare directly without primary keys
-        df1_common = df1[column_1].reset_index(drop=True)
-        df2_common = df2[column_2].reset_index(drop=True)
-        min_length = min(len(df1_common), len(df2_common))
-        differences = df1_common[:min_length] != df2_common[:min_length]
-
-    return df1_common[differences].reset_index(drop=True), df2_common[differences].reset_index(drop=True)
-
-def compare_dataframes(df1, df2, column_1, column_2, use_primary=True):
-    if use_primary:
-        # Align using primary keys
-        common_index = df1.index.intersection(df2.index)
-        df1_common = df1.loc[common_index, column_1]
-        df2_common = df2.loc[common_index, column_2]
-        differences = df1_common != df2_common
-        return df1_common[differences], df2_common[differences]
-    else:
-        # Optimal comparison using set operations
-        df1_values = set(df1[column_1])
-        df2_values = set(df2[column_2])
-
-        # Find differences using set operations
-        df1_unique = list(df1_values - df2_values)
-        df2_unique = list(df2_values - df1_values)
-
-        return pd.Series(df1_unique), pd.Series(df2_unique)
-
-# Example usage
-# df1 = pd.DataFrame({'A': [1, 2, 3, 4]})
-# df2 = pd.DataFrame({'B': [3, 4, 5, 6]})
-# print(compare_dataframes(df1, df2, 'A', 'B', use_primary=False))
-
-
-
-
 def main():
     st.set_page_config(layout="wide")
 
@@ -400,50 +354,46 @@ def main():
                 df2 = run_query(query2, st.session_state["connections"],full_fetch=True,count_only=False)
 
                 if df1 is not None and df2 is not None:
-                    # Reset index to ensure it starts from 0, providing a row index
-                    df1.reset_index(drop=True, inplace=True)
-                    df2.reset_index(drop=True, inplace=True)
-
                     # Display column names for verification
                     st.write(f"Columns in {query1['name']}:", df1.columns.tolist())
                     st.write(f"Columns in {query2['name']}:", df2.columns.tolist())
 
-                    # Option to use or not use primary keys
-                    use_primary_key = st.checkbox("Use Primary Key for Alignment", value=True)
+                    # Independent selection of primary keys and columns for comparison
+                    primary_key_1 = st.selectbox(f"Select primary key column from {query1['name']}", options=df1.columns)
+                    primary_key_2 = st.selectbox(f"Select primary key column from {query2['name']}", options=df2.columns)
 
-                    if use_primary_key:
-                        primary_key_1 = st.selectbox(f"Select primary key column from {query1['name']}",
-                                                     options=df1.columns)
-                        primary_key_2 = st.selectbox(f"Select primary key column from {query2['name']}",
-                                                     options=df2.columns)
+                    selected_column_1 = st.selectbox(f"Select a column from {query1['name']} to compare", options=df1.columns)
+                    selected_column_2 = st.selectbox(f"Select a column from {query2['name']} to compare", options=df2.columns)
 
-                        df1.set_index(primary_key_1, inplace=True)
-                        df2.set_index(primary_key_2, inplace=True)
+                    # Use primary keys as index for comparison
+                    df1.set_index(primary_key_1, inplace=True)
+                    df2.set_index(primary_key_2, inplace=True)
 
-                    selected_column_1 = st.selectbox(f"Select a column from {query1['name']} to compare",
-                                                     options=df1.columns)
-                    selected_column_2 = st.selectbox(f"Select a column from {query2['name']} to compare",
-                                                     options=df2.columns)
+                    common_index = df1.index.intersection(df2.index)
 
                     if st.button("Initiate Comparison"):
                         try:
-                            df1_common, df2_common = compare_dataframes(df1, df2, selected_column_1, selected_column_2,
-                                                                        use_primary=use_primary_key)
+                            # Only consider entries with common primary keys
+                            df1_common = df1.loc[common_index, [selected_column_1]]
+                            df2_common = df2.loc[common_index, [selected_column_2]]
 
-                            # Display Tables and Comparison Results
+                            # Compare the selected columns
+                            differences = df1_common[selected_column_1] != df2_common[selected_column_2]
+
+                            # Display the original tables
                             st.subheader("Data Table 1")
-                            st.dataframe(df1)  # Displays with index as row number
+                            st.write(df1)
 
                             st.subheader("Data Table 2")
-                            st.dataframe(df2)  # Displays with index as row number
+                            st.write(df2)
 
-                            if not df1_common.empty:
-                                st.subheader("Comparison Results")
+                            # Report differences
+                            if differences.any():
                                 diff_df = pd.DataFrame({
-                                    #"Row": df1_common.index + 1,  # Adding +1 to make it 1-based indexing in display
-                                    f"{query1['name']} ({selected_column_1})": df1_common,
-                                    f"{query2['name']} ({selected_column_2})": df2_common,
-                                }).reset_index(drop=True)
+                                    f"{query1['name']} ({selected_column_1})": df1_common[differences][selected_column_1],
+                                    f"{query2['name']} ({selected_column_2})": df2_common[differences][selected_column_2],
+                                })
+                                st.subheader("Comparison Results")
                                 st.write(diff_df)
                             else:
                                 st.subheader("Comparison Results")
@@ -454,8 +404,6 @@ def main():
                     st.warning("Could not fetch one or both datasets for comparison.")
         else:
             st.info("Please select exactly two queries to proceed with a comparison.")
-
-
 
 def compare_columns(df1, df2):
     comparisons = []

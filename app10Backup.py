@@ -114,52 +114,6 @@ def get_row_count(sql_query, conn_config):
         row_count = result.scalar()
     return row_count
 
-    # Function to compare two DataFrames based on selected columns
-
-
-def compare_dataframes2(df1, df2, column_1, column_2, use_primary=True):
-    if use_primary:
-        # Align using primary keys
-        common_index = df1.index.intersection(df2.index)
-        df1_common = df1.loc[common_index, column_1]
-        df2_common = df2.loc[common_index, column_2]
-        differences = df1_common != df2_common
-    else:
-        # Compare directly without primary keys
-        df1_common = df1[column_1].reset_index(drop=True)
-        df2_common = df2[column_2].reset_index(drop=True)
-        min_length = min(len(df1_common), len(df2_common))
-        differences = df1_common[:min_length] != df2_common[:min_length]
-
-    return df1_common[differences].reset_index(drop=True), df2_common[differences].reset_index(drop=True)
-
-def compare_dataframes(df1, df2, column_1, column_2, use_primary=True):
-    if use_primary:
-        # Align using primary keys
-        common_index = df1.index.intersection(df2.index)
-        df1_common = df1.loc[common_index, column_1]
-        df2_common = df2.loc[common_index, column_2]
-        differences = df1_common != df2_common
-        return df1_common[differences], df2_common[differences]
-    else:
-        # Optimal comparison using set operations
-        df1_values = set(df1[column_1])
-        df2_values = set(df2[column_2])
-
-        # Find differences using set operations
-        df1_unique = list(df1_values - df2_values)
-        df2_unique = list(df2_values - df1_values)
-
-        return pd.Series(df1_unique), pd.Series(df2_unique)
-
-# Example usage
-# df1 = pd.DataFrame({'A': [1, 2, 3, 4]})
-# df2 = pd.DataFrame({'B': [3, 4, 5, 6]})
-# print(compare_dataframes(df1, df2, 'A', 'B', use_primary=False))
-
-
-
-
 def main():
     st.set_page_config(layout="wide")
 
@@ -387,84 +341,72 @@ def main():
     with tab4:
         st.header("Comparison Dashboard")
 
-        comparison_queries = st.multiselect(
-            "Select two queries to compare", [q["name"] for q in st.session_state["queries"]]
-        )
+        # Section to select queries for comparison
+        comparison_queries = st.multiselect("Select two queries to compare",
+                                            options=[q['name'] for q in st.session_state['queries']],
+                                            help="Select exactly two queries to perform a comparison.")
 
         if len(comparison_queries) == 2:
-            query1 = next((q for q in st.session_state["queries"] if q["name"] == comparison_queries[0]), None)
-            query2 = next((q for q in st.session_state["queries"] if q["name"] == comparison_queries[1]), None)
+            # Fetch query configurations
+            query1 = next((q for q in st.session_state['queries'] if q['name'] == comparison_queries[0]), None)
+            query2 = next((q for q in st.session_state['queries'] if q['name'] == comparison_queries[1]), None)
 
             if query1 and query2:
-                df1 = run_query(query1, st.session_state["connections"],full_fetch=True,count_only=False)
-                df2 = run_query(query2, st.session_state["connections"],full_fetch=True,count_only=False)
+                # Run the queries to fetch the data
+                df1 = run_query(query1, st.session_state['connections'], full_fetch=True)
+                df2 = run_query(query2, st.session_state['connections'], full_fetch=True)
 
                 if df1 is not None and df2 is not None:
-                    # Reset index to ensure it starts from 0, providing a row index
-                    df1.reset_index(drop=True, inplace=True)
-                    df2.reset_index(drop=True, inplace=True)
+                    # Combine column names from both data frames with query aliases
+                    columns_query1 = [f"{query1['name']}:{col}" for col in df1.columns]
+                    columns_query2 = [f"{query2['name']}:{col}" for col in df2.columns]
+                    all_columns = columns_query1 + columns_query2
 
-                    # Display column names for verification
-                    st.write(f"Columns in {query1['name']}:", df1.columns.tolist())
-                    st.write(f"Columns in {query2['name']}:", df2.columns.tolist())
-
-                    # Option to use or not use primary keys
-                    use_primary_key = st.checkbox("Use Primary Key for Alignment", value=True)
-
-                    if use_primary_key:
-                        primary_key_1 = st.selectbox(f"Select primary key column from {query1['name']}",
-                                                     options=df1.columns)
-                        primary_key_2 = st.selectbox(f"Select primary key column from {query2['name']}",
-                                                     options=df2.columns)
-
-                        df1.set_index(primary_key_1, inplace=True)
-                        df2.set_index(primary_key_2, inplace=True)
-
-                    selected_column_1 = st.selectbox(f"Select a column from {query1['name']} to compare",
-                                                     options=df1.columns)
-                    selected_column_2 = st.selectbox(f"Select a column from {query2['name']} to compare",
-                                                     options=df2.columns)
+                    # Allow user to select specific columns for comparison
+                    columns_to_compare = st.multiselect("Select columns to compare", options=all_columns)
 
                     if st.button("Initiate Comparison"):
-                        try:
-                            df1_common, df2_common = compare_dataframes(df1, df2, selected_column_1, selected_column_2,
-                                                                        use_primary=use_primary_key)
+                        # Parse selected columns back to original column names split by ':' (query name)
+                        columns_df1 = [col.split(':', 1)[1] for col in columns_to_compare if
+                                       col.startswith(query1['name'])]
+                        columns_df2 = [col.split(':', 1)[1] for col in columns_to_compare if
+                                       col.startswith(query2['name'])]
 
-                            # Display Tables and Comparison Results
-                            st.subheader("Data Table 1")
-                            st.dataframe(df1)  # Displays with index as row number
+                        # Create side-by-side display and ensure these columns exist before attempting comparison
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.subheader(f"Data from {query1['name']}")
+                            st.dataframe(df1[columns_df1])
 
-                            st.subheader("Data Table 2")
-                            st.dataframe(df2)  # Displays with index as row number
+                        with col2:
+                            st.subheader(f"Data from {query2['name']}")
+                            st.dataframe(df2[columns_df2])
 
-                            if not df1_common.empty:
-                                st.subheader("Comparison Results")
-                                diff_df = pd.DataFrame({
-                                    #"Row": df1_common.index + 1,  # Adding +1 to make it 1-based indexing in display
-                                    f"{query1['name']} ({selected_column_1})": df1_common,
-                                    f"{query2['name']} ({selected_column_2})": df2_common,
-                                }).reset_index(drop=True)
-                                st.write(diff_df)
+                        # Perform comparison only on common selected columns
+                        common_columns = set(columns_df1).intersection(columns_df2)
+                        if common_columns:
+                            # Convert the common_columns set to a list for indexing
+                            common_columns_list = list(common_columns)
+
+                            common_index = df1.index.intersection(df2.index)
+                            diff_df = df1.loc[common_index, common_columns_list].compare(
+                                df2.loc[common_index, common_columns_list],
+                                keep_shape=False, keep_equal=False
+                            )
+
+                            # Display differences
+                            st.subheader("Differences between datasets")
+                            if not diff_df.empty:
+                                st.dataframe(diff_df)
                             else:
-                                st.subheader("Comparison Results")
-                                st.write("No differences found in the selected columns.")
-                        except Exception as e:
-                            st.error(f"Comparison failed: {e}")
+                                st.write("No differences found between the selected columns of the datasets.")
+                        else:
+                            st.warning("No common columns selected for comparison.")
+
                 else:
                     st.warning("Could not fetch one or both datasets for comparison.")
         else:
             st.info("Please select exactly two queries to proceed with a comparison.")
-
-
-
-def compare_columns(df1, df2):
-    comparisons = []
-    for col1 in df1.columns:
-        for col2 in df2.columns:
-            comparison = df1[col1].compare(df2[col2], keep_shape=True, keep_equal=False)
-            if not comparison.empty:
-                comparisons.append((col1, col2, comparison))
-    return comparisons
 
 
 def test_snowflake_connection(conn_config):
